@@ -29,25 +29,21 @@ The `jsonb_merge` function follows these rules:
 
 ### Build
 
-You can build the extension in either release (default) or debug mode.
+```bash
+# Build the extension
+make all
 
-- **Release Build**:
+# Clean build artifacts
+make clean
 
-  ```bash
-  make release
-  ```
-
-- **Debug Build**:
-
-  ```bash
-  make debug
-  ```
-
-The compiled library will be located in the `build/` directory (e.g., `build/release/jsonb_merge.dylib`).
+# Install the extension (requires PostgreSQL development headers)
+make install
+```
 
 ### Deploy
 
-To deploy the extension to your PostgreSQL installation, you can use the `deploy` commands.
+To deploy the extension to your PostgreSQL installation, you can use the install command above.
+The extension will be installed to your PostgreSQL installation's library directory.
 
 - **Deploy Release Build**:
   ```bash

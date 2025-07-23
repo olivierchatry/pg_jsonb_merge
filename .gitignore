@@ -1,0 +1,36 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.dylib
+*.bc
+*.dSYM/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Docker
+.dockerignore
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# PostgreSQL extension artifacts (backup)
+*.backup
+*.orig
+
+# Compiled binaries
+*.exe
+*.out
+*.app
