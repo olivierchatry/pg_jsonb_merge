@@ -41,8 +41,8 @@ jobs:
           14) echo "image=postgres:14-alpine3.18" >> $GITHUB_OUTPUT ;;
           15) echo "image=postgres:15-alpine3.19" >> $GITHUB_OUTPUT ;;
           16) echo "image=postgres:16-alpine3.20" >> $GITHUB_OUTPUT ;;
-          17) echo "image=postgres:17-alpine3.20" >> $GITHUB_OUTPUT ;;
-          *) echo "image=postgres:17-alpine3.20" >> $GITHUB_OUTPUT ;;
+          17) echo "image=postgres:17-alpine3.21" >> $GITHUB_OUTPUT ;;
+          *) echo "image=postgres:17-alpine3.21" >> $GITHUB_OUTPUT ;;
         esac
 
     - name: Quick test PostgreSQL ${{ github.event.inputs.pg_version }}
@@ -60,7 +60,15 @@ jobs:
           gcc musl-dev make postgresql${{ github.event.inputs.pg_version }}-dev
         
         docker cp . test_pg${{ github.event.inputs.pg_version }}:/src/
-        docker exec test_pg${{ github.event.inputs.pg_version }} sh -c "cd /src && make clean && make install"
+        docker exec test_pg${{ github.event.inputs.pg_version }} sh -c "
+          cd /src && 
+          export CC=gcc && 
+          export CXX=g++ && 
+          export CLANG= && 
+          export LLVM_CONFIG= &&
+          make clean && 
+          make install CC=gcc with_llvm=no
+        "
         
         # Quick test
         docker exec test_pg${{ github.event.inputs.pg_version }} psql -U postgres -c "CREATE EXTENSION jsonb_merge;"

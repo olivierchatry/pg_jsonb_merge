@@ -79,14 +79,30 @@ jobs:
           musl-dev \
           make \
           postgresql${{ matrix.pg_version }}-dev
+        
+        # Ensure we use GCC instead of clang and disable LLVM
+        docker exec jsonb_merge_test_db sh -c "
+          export CC=gcc
+          export CXX=g++
+          export CLANG=
+          export LLVM_CONFIG=
+        "
 
     - name: Build and install extension
       run: |
         # Copy source files to container
         docker cp . jsonb_merge_test_db:/tmp/
         
-        # Build and install extension
-        docker exec jsonb_merge_test_db sh -c "cd /tmp && make clean && make install with_llvm=no"
+        # Build and install extension with explicit compiler settings
+        docker exec jsonb_merge_test_db sh -c "
+          cd /tmp && 
+          export CC=gcc && 
+          export CXX=g++ && 
+          export CLANG= && 
+          export LLVM_CONFIG= &&
+          make clean && 
+          make install with_llvm=no CC=gcc
+        "
 
     - name: Run tests
       run: |
@@ -145,7 +161,7 @@ jobs:
           - pg_version: 16
             image: postgres:16-alpine3.20
           - pg_version: 17
-            image: postgres:17-alpine3.20
+            image: postgres:17-alpine3.21
     
     steps:
     - name: Checkout code
@@ -168,7 +184,15 @@ jobs:
         
         # Copy source and build
         docker cp . pg${{ matrix.pg_version }}_builder:/src/
-        docker exec pg${{ matrix.pg_version }}_builder sh -c "cd /src && make clean && make"
+        docker exec pg${{ matrix.pg_version }}_builder sh -c "
+          cd /src && 
+          export CC=gcc && 
+          export CXX=g++ && 
+          export CLANG= && 
+          export LLVM_CONFIG= &&
+          make clean && 
+          make CC=gcc with_llvm=no
+        "
         
         # Create output directory structure
         mkdir -p build/pg${{ matrix.pg_version }}
