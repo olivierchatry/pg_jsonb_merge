@@ -5,7 +5,6 @@ SELECT jsonb_merge(
     '{"data": "simple string"}'
 ) AS result;
 
--- Verify the result
 SELECT jsonb_merge(
     '{"data": {"nested": {"value": 42}}}',
     '{"data": "simple string"}'

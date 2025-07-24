@@ -5,7 +5,6 @@ SELECT jsonb_merge(
     '{"c": 3, "d": 4}'
 ) AS result;
 
--- Verify the result
 SELECT jsonb_merge(
     '{"a": 1, "b": 2}',
     '{"c": 3, "d": 4}'
