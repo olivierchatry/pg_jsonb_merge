@@ -18,7 +18,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [12, 13, 14, 15, 16, 17]
+        include:
+          - pg_version: 12
+            image: postgres:12-alpine3.17
+          - pg_version: 13
+            image: postgres:13-alpine3.17
+          - pg_version: 14
+            image: postgres:14-alpine3.18
+          - pg_version: 15
+            image: postgres:15-alpine3.19
+          - pg_version: 16
+            image: postgres:16-alpine3.20
+          - pg_version: 17
+            image: postgres:17-alpine3.20
     
     steps:
     - name: Checkout code
@@ -33,7 +45,7 @@ jobs:
         version: '3.8'
         services:
           postgres:
-            image: postgres:${{ matrix.pg_version }}-alpine
+            image: ${{ matrix.image }}
             container_name: jsonb_merge_test_db
             environment:
               POSTGRES_DB: postgres
@@ -121,7 +133,19 @@ jobs:
     
     strategy:
       matrix:
-        pg_version: [12, 13, 14, 15, 16, 17]
+        include:
+          - pg_version: 12
+            image: postgres:12-alpine3.17
+          - pg_version: 13
+            image: postgres:13-alpine3.17
+          - pg_version: 14
+            image: postgres:14-alpine3.18
+          - pg_version: 15
+            image: postgres:15-alpine3.19
+          - pg_version: 16
+            image: postgres:16-alpine3.20
+          - pg_version: 17
+            image: postgres:17-alpine3.20
     
     steps:
     - name: Checkout code
@@ -133,7 +157,7 @@ jobs:
     - name: Build extension for PostgreSQL ${{ matrix.pg_version }}
       run: |
         # Create build container
-        docker run --name pg${{ matrix.pg_version }}_builder -d postgres:${{ matrix.pg_version }}-alpine tail -f /dev/null
+        docker run --name pg${{ matrix.pg_version }}_builder -d ${{ matrix.image }} tail -f /dev/null
         
         # Install build dependencies
         docker exec pg${{ matrix.pg_version }}_builder apk add --no-cache \

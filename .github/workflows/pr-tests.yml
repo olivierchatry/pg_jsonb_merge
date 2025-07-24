@@ -33,7 +33,15 @@ jobs:
     
     strategy:
       matrix:
-        pg_version: [14, 15, 16, 17]
+        include:
+          - pg_version: 14
+            image: postgres:14-alpine3.18
+          - pg_version: 15
+            image: postgres:15-alpine3.19
+          - pg_version: 16
+            image: postgres:16-alpine3.20
+          - pg_version: 17
+            image: postgres:17-alpine3.20
     
     steps:
     - name: Checkout code
@@ -42,7 +50,7 @@ jobs:
     - name: Test PostgreSQL ${{ matrix.pg_version }}
       run: |
         # Create custom docker-compose for this PG version
-        sed "s/postgres:.*-alpine/postgres:${{ matrix.pg_version }}-alpine/" docker-compose.yml > docker-compose.test.yml
+        sed "s/postgres:.*-alpine/${{ matrix.image }}/" docker-compose.yml > docker-compose.test.yml
         
         # Run tests
         export COMPOSE_FILE=docker-compose.test.yml
