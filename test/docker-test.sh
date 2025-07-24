@@ -156,7 +156,7 @@ run_tests() {
         if echo "$test_output" | grep -q "ERROR:"; then
             has_failure=true
         fi
-        
+
         if [ "$has_failure" = true ]; then
             echo -e "  ❌ ${RED}$test_description${NC}"
             echo -e "     ${YELLOW}📋 Test Details:${NC}"

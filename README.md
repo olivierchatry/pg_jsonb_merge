@@ -14,9 +14,11 @@ The `jsonb_merge` function follows these rules:
 ## Features
 
 - **Recursive Merge**: Deeply merges nested JSONB objects.
+- **Configurable Array Merge**: Choose to merge or replace arrays with boolean flag.
 - **C Implementation**: High-performance merge logic written in C.
 - **Debug and Release Builds**: `Makefile` supports both debug and release build modes.
 - **Dockerized Testing**: Includes a Docker setup for isolated testing.
+- **Performance Benchmarks**: Built-in benchmarking for regression testing.
 - **Cross-Platform**: Builds on macOS and Linux.
 
 ## Getting Started
@@ -67,9 +69,27 @@ The project includes a comprehensive test suite.
 
 - **Dockerized Test**:
   This is the recommended way to test, as it runs in a clean, isolated environment.
+
   ```bash
   make test-docker
   ```
+
+### Performance Benchmarks
+
+The extension includes a dedicated performance benchmarking script to help track performance and catch regressions:
+
+```bash
+./benchmark.sh
+```
+
+This will:
+- Set up a clean testing environment
+- Build and install the extension
+- Run comprehensive performance tests
+- Compare against PostgreSQL's built-in operators
+- Display detailed timing results
+
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance information and baseline results.
 
 ## Examples
 
