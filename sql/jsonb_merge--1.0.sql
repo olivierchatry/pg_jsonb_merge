@@ -11,3 +11,10 @@ LANGUAGE C IMMUTABLE;
 
 -- Add a comment to explain what the function does
 COMMENT ON FUNCTION jsonb_merge(jsonb, jsonb) IS 'Merges two JSONB values, with the second one taking precedence on conflicts';
+
+CREATE OR REPLACE FUNCTION jsonb_merge(jsonb, jsonb, boolean)
+RETURNS jsonb
+AS 'MODULE_PATHNAME', 'jsonb_merge_with_option'
+LANGUAGE C IMMUTABLE;
+
+COMMENT ON FUNCTION jsonb_merge(jsonb, jsonb, boolean) IS 'Merges two JSONB values, with the second one taking precedence on conflicts, and with optional array merging';

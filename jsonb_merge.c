@@ -11,13 +11,17 @@ PG_MODULE_MAGIC;
 
 /* Function declarations */
 PG_FUNCTION_INFO_V1(jsonb_merge);
-static JsonbValue *jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb);
+PG_FUNCTION_INFO_V1(jsonb_merge_with_option);
+
+static JsonbValue *jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb, bool merge_arrays);
+static Datum jsonb_merge_worker(PG_FUNCTION_ARGS, bool merge_arrays);
+
 
 /*
  * Recursive merge helper function
  */
 static JsonbValue *
-jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb)
+jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb, bool merge_arrays)
 {
     JsonbParseState *state = NULL;
     JsonbValue *res;
@@ -72,18 +76,52 @@ jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb)
 
             if (val_b != NULL)
             {
-                /* Key exists in both */
-                if (va.type == jbvBinary && val_b->type == jbvBinary &&
-                    JsonContainerIsObject(va.val.binary.data) &&
-                    JsonContainerIsObject(val_b->val.binary.data))
+                /* Key exists in both, check types */
+                if (va.type == jbvBinary && val_b->type == jbvBinary)
                 {
-                    /* Both values are objects, recursively merge them */
-                    JsonbValue *merged_val = jsonb_merge_recursive(va.val.binary.data, val_b->val.binary.data);
-                    (void) pushJsonbValue(&state, WJB_VALUE, merged_val);
+                    JsonbContainer *ca = va.val.binary.data;
+                    JsonbContainer *cb = val_b->val.binary.data;
+
+                    if (JsonContainerIsObject(ca) && JsonContainerIsObject(cb))
+                    {
+                        /* Both are objects, merge recursively */
+                        JsonbValue *merged_val = jsonb_merge_recursive(ca, cb, merge_arrays);
+                        (void) pushJsonbValue(&state, WJB_VALUE, merged_val);
+                    }
+                    else if (JsonContainerIsArray(ca) && JsonContainerIsArray(cb) && merge_arrays)
+                    {
+                        /* Both are arrays, concatenate them if merge_arrays is true */
+                        JsonbIterator *ita_inner, *itb_inner;
+                        JsonbIteratorToken tok;
+                        JsonbValue v;
+
+                        (void) pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
+
+                        ita_inner = JsonbIteratorInit(ca);
+                        while ((tok = JsonbIteratorNext(&ita_inner, &v, true)) != WJB_DONE)
+                        {
+                            if (tok == WJB_ELEM)
+                                (void) pushJsonbValue(&state, tok, &v);
+                        }
+
+                        itb_inner = JsonbIteratorInit(cb);
+                        while ((tok = JsonbIteratorNext(&itb_inner, &v, true)) != WJB_DONE)
+                        {
+                            if (tok == WJB_ELEM)
+                                (void) pushJsonbValue(&state, tok, &v);
+                        }
+
+                        (void) pushJsonbValue(&state, WJB_END_ARRAY, NULL);
+                    }
+                    else
+                    {
+                        /* Types are different, or not both objects/arrays, so B overrides A */
+                        (void) pushJsonbValue(&state, WJB_VALUE, val_b);
+                    }
                 }
                 else
                 {
-                    /* At least one is not an object - use value from second object */
+                    /* Not both binary containers, so B overrides A */
                     (void) pushJsonbValue(&state, WJB_VALUE, val_b);
                 }
             }
@@ -128,10 +166,30 @@ jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb)
 
 /*
  * Main function: jsonb_merge(jsonb, jsonb) -> jsonb
- * Recursively merges two JSONB values
+ * Recursively merges two JSONB values, with array merging enabled by default.
  */
 Datum
 jsonb_merge(PG_FUNCTION_ARGS)
+{
+    return jsonb_merge_worker(fcinfo, true);
+}
+
+/*
+ * Main function: jsonb_merge(jsonb, jsonb, boolean) -> jsonb
+ * Recursively merges two JSONB values, with optional array merging.
+ */
+Datum
+jsonb_merge_with_option(PG_FUNCTION_ARGS)
+{
+    bool merge_arrays = PG_GETARG_BOOL(2);
+    return jsonb_merge_worker(fcinfo, merge_arrays);
+}
+
+/*
+ * Common worker function for jsonb_merge variants
+ */
+static Datum
+jsonb_merge_worker(PG_FUNCTION_ARGS, bool merge_arrays)
 {
     Jsonb *jba, *jbb;
     Jsonb *result;
@@ -152,7 +210,7 @@ jsonb_merge(PG_FUNCTION_ARGS)
     jbb = PG_GETARG_JSONB_P(1);
 
     /* Perform the recursive merge */
-    res_val = jsonb_merge_recursive(&jba->root, &jbb->root);
+    res_val = jsonb_merge_recursive(&jba->root, &jbb->root, merge_arrays);
 
     result = JsonbValueToJsonb(res_val);
 

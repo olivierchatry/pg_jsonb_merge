@@ -1,5 +1,4 @@
--- test/07_array_handling.sql
-\echo 'Test 7: Array handling (arrays should be overwritten by default)'
+-- Test: Array handling with merge_arrays = false (default behavior)
 WITH actual AS (
     SELECT jsonb_merge('{"data": [1, 2, 3]}', '{"data": [4, 5, 6]}', false) AS result
 ),
