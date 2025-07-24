@@ -1,0 +1,110 @@
+name: Pull Request Tests
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - '*.c'
+      - '*.h'
+      - 'Makefile'
+      - 'sql/**'
+      - 'test/**'
+      - '.github/workflows/**'
+
+jobs:
+  quick-test:
+    name: Quick Test (Latest PostgreSQL)
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run quick test with latest PostgreSQL
+      run: |
+        # Use the existing docker-test.sh script
+        chmod +x test/docker-test.sh
+        echo "n" | ./test/docker-test.sh
+
+  compatibility-test:
+    name: Compatibility Test PG${{ matrix.pg_version }}
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'test-all-versions')
+    
+    strategy:
+      matrix:
+        pg_version: [14, 15, 16, 17]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Test PostgreSQL ${{ matrix.pg_version }}
+      run: |
+        # Create custom docker-compose for this PG version
+        sed "s/postgres:.*-alpine/postgres:${{ matrix.pg_version }}-alpine/" docker-compose.yml > docker-compose.test.yml
+        
+        # Run tests
+        export COMPOSE_FILE=docker-compose.test.yml
+        chmod +x test/docker-test.sh
+        echo "n" | ./test/docker-test.sh
+
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check for common issues
+      run: |
+        # Check for potential memory leaks or issues
+        echo "Checking for common PostgreSQL extension issues..."
+        
+        # Check for proper PG_MODULE_MAGIC
+        if ! grep -q "PG_MODULE_MAGIC" *.c; then
+          echo "❌ Missing PG_MODULE_MAGIC in C files"
+          exit 1
+        fi
+        
+        # Check for proper function declarations
+        if ! grep -q "PG_FUNCTION_INFO_V1" *.c; then
+          echo "❌ Missing PG_FUNCTION_INFO_V1 declarations"
+          exit 1
+        fi
+        
+        # Check SQL files syntax
+        for sql_file in sql/*.sql; do
+          if [ -f "$sql_file" ]; then
+            echo "Checking syntax of $sql_file..."
+            # Basic syntax check - look for common issues
+            if grep -q "CREATE OR REPLACE FUNCTION" "$sql_file" && ! grep -q "LANGUAGE C" "$sql_file"; then
+              echo "⚠️  Warning: C function without LANGUAGE C in $sql_file"
+            fi
+          fi
+        done
+        
+        echo "✅ Code quality checks passed"
+
+    - name: Check documentation
+      run: |
+        echo "Checking documentation..."
+        
+        # Check if README exists and has basic content
+        if [ ! -f README.md ]; then
+          echo "❌ Missing README.md"
+          exit 1
+        fi
+        
+        if ! grep -q "jsonb_merge" README.md; then
+          echo "❌ README.md doesn't mention jsonb_merge"
+          exit 1
+        fi
+        
+        # Check for installation instructions
+        if ! grep -q -i "install" README.md; then
+          echo "⚠️  Warning: README.md might be missing installation instructions"
+        fi
+        
+        echo "✅ Documentation checks passed"

@@ -1,0 +1,73 @@
+name: Development Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      pg_versions:
+        description: 'PostgreSQL versions to build (comma-separated, e.g., "15,16,17")'
+        required: false
+        default: '16,17'
+      create_artifacts:
+        description: 'Create build artifacts'
+        type: boolean
+        default: true
+
+jobs:
+  dev-build:
+    name: Development Build PG${{ matrix.pg_version }}
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        pg_version: ${{ fromJson(format('[{0}]', github.event.inputs.pg_versions || '16,17')) }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Quick test PostgreSQL ${{ matrix.pg_version }}
+      run: |
+        # Create test container
+        docker run --name test_pg${{ matrix.pg_version }} -d \
+          -e POSTGRES_PASSWORD=postgres \
+          postgres:${{ matrix.pg_version }}-alpine
+        
+        # Wait for PostgreSQL
+        sleep 10
+        
+        # Install dependencies and build
+        docker exec test_pg${{ matrix.pg_version }} apk add --no-cache \
+          gcc musl-dev make postgresql${{ matrix.pg_version }}-dev
+        
+        docker cp . test_pg${{ matrix.pg_version }}:/src/
+        docker exec test_pg${{ matrix.pg_version }} sh -c "cd /src && make clean && make install"
+        
+        # Quick test
+        docker exec test_pg${{ matrix.pg_version }} psql -U postgres -c "CREATE EXTENSION jsonb_merge;"
+        docker exec test_pg${{ matrix.pg_version }} psql -U postgres -c "SELECT jsonb_merge('{\"a\": 1}', '{\"b\": 2}');"
+
+    - name: Create artifact
+      if: github.event.inputs.create_artifacts == 'true'
+      run: |
+        mkdir -p dev-build/pg${{ matrix.pg_version }}
+        docker cp test_pg${{ matrix.pg_version }}:/src/jsonb_merge.so dev-build/pg${{ matrix.pg_version }}/
+        docker cp test_pg${{ matrix.pg_version }}:/src/jsonb_merge.control dev-build/pg${{ matrix.pg_version }}/
+        docker cp test_pg${{ matrix.pg_version }}:/src/sql/ dev-build/pg${{ matrix.pg_version }}/
+        
+        tar -czf jsonb_merge-dev-pg${{ matrix.pg_version }}.tar.gz -C dev-build pg${{ matrix.pg_version }}
+
+    - name: Upload development artifact
+      if: github.event.inputs.create_artifacts == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: jsonb_merge-dev-pg${{ matrix.pg_version }}
+        path: jsonb_merge-dev-pg${{ matrix.pg_version }}.tar.gz
+        retention-days: 7
+
+    - name: Cleanup
+      if: always()
+      run: |
+        docker rm -f test_pg${{ matrix.pg_version }} || true

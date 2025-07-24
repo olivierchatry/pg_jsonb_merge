@@ -1,0 +1,341 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  EXTENSION_NAME: jsonb_merge
+
+jobs:
+  test:
+    name: Test PostgreSQL ${{ matrix.pg_version }}
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_version: [12, 13, 14, 15, 16, 17]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Create test Docker Compose
+      run: |
+        cat > docker-compose.test.yml << EOF
+        version: '3.8'
+        services:
+          postgres:
+            image: postgres:${{ matrix.pg_version }}-alpine
+            container_name: jsonb_merge_test_db
+            environment:
+              POSTGRES_DB: postgres
+              POSTGRES_USER: postgres
+              POSTGRES_PASSWORD: postgres
+            ports:
+              - "5432:5432"
+            volumes:
+              - postgres_data:/var/lib/postgresql/data
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U postgres"]
+              interval: 5s
+              timeout: 5s
+              retries: 5
+
+        volumes:
+          postgres_data:
+        EOF
+
+    - name: Start PostgreSQL ${{ matrix.pg_version }}
+      run: |
+        docker compose -f docker-compose.test.yml up -d
+        
+        # Wait for PostgreSQL to be ready
+        timeout 60 bash -c 'until docker exec jsonb_merge_test_db pg_isready -U postgres; do sleep 2; done'
+
+    - name: Install build dependencies in container
+      run: |
+        docker exec jsonb_merge_test_db apk add --no-cache \
+          gcc \
+          musl-dev \
+          make \
+          postgresql${{ matrix.pg_version }}-dev
+
+    - name: Build and install extension
+      run: |
+        # Copy source files to container
+        docker cp . jsonb_merge_test_db:/tmp/
+        
+        # Build and install extension
+        docker exec jsonb_merge_test_db sh -c "cd /tmp && make clean && make install with_llvm=no"
+
+    - name: Run tests
+      run: |
+        # Create extension
+        docker exec jsonb_merge_test_db psql -U postgres -d postgres -c "CREATE EXTENSION IF NOT EXISTS jsonb_merge;"
+        
+        # Copy and run tests
+        docker cp ./test jsonb_merge_test_db:/tmp/
+        
+        # Run all test files and check for failures
+        for test_file in ./test/*.sql; do
+          if [ -f "$test_file" ]; then
+            echo "Running $(basename $test_file)..."
+            test_output=$(docker exec jsonb_merge_test_db psql -U postgres -d postgres -f /tmp/test/$(basename $test_file) 2>&1)
+            
+            # Check for test failures (lines ending with ' f')
+            if echo "$test_output" | grep -q ' f$'; then
+              echo "❌ Test failed: $(basename $test_file)"
+              echo "$test_output"
+              exit 1
+            fi
+            
+            # Check for SQL errors
+            if echo "$test_output" | grep -q "ERROR:"; then
+              echo "❌ SQL Error in: $(basename $test_file)"
+              echo "$test_output"
+              exit 1
+            fi
+            
+            echo "✅ Test passed: $(basename $test_file)"
+          fi
+        done
+
+    - name: Stop containers
+      if: always()
+      run: |
+        docker compose -f docker-compose.test.yml down -v
+
+  build:
+    name: Build PostgreSQL ${{ matrix.pg_version }}
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        pg_version: [12, 13, 14, 15, 16, 17]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build extension for PostgreSQL ${{ matrix.pg_version }}
+      run: |
+        # Create build container
+        docker run --name pg${{ matrix.pg_version }}_builder -d postgres:${{ matrix.pg_version }}-alpine tail -f /dev/null
+        
+        # Install build dependencies
+        docker exec pg${{ matrix.pg_version }}_builder apk add --no-cache \
+          gcc \
+          musl-dev \
+          make \
+          postgresql${{ matrix.pg_version }}-dev
+        
+        # Copy source and build
+        docker cp . pg${{ matrix.pg_version }}_builder:/src/
+        docker exec pg${{ matrix.pg_version }}_builder sh -c "cd /src && make clean && make"
+        
+        # Create output directory structure
+        mkdir -p build/pg${{ matrix.pg_version }}
+        
+        # Copy built files
+        docker cp pg${{ matrix.pg_version }}_builder:/src/jsonb_merge.so build/pg${{ matrix.pg_version }}/
+        docker cp pg${{ matrix.pg_version }}_builder:/src/jsonb_merge.control build/pg${{ matrix.pg_version }}/
+        docker cp pg${{ matrix.pg_version }}_builder:/src/sql/ build/pg${{ matrix.pg_version }}/
+        
+        # Copy additional files
+        cp README.md build/pg${{ matrix.pg_version }}/
+        cp Makefile build/pg${{ matrix.pg_version }}/
+        cp jsonb_merge.c build/pg${{ matrix.pg_version }}/
+        
+        # Create installation instructions
+        cat > build/pg${{ matrix.pg_version }}/INSTALL.md << EOF
+        # Installation Instructions for PostgreSQL ${{ matrix.pg_version }}
+        
+        ## Manual Installation
+        
+        1. Copy the files to your PostgreSQL installation:
+           \`\`\`bash
+           # Copy shared library
+           sudo cp jsonb_merge.so \$(pg_config --pkglibdir)/
+           
+           # Copy control file
+           sudo cp jsonb_merge.control \$(pg_config --sharedir)/extension/
+           
+           # Copy SQL files
+           sudo cp sql/*.sql \$(pg_config --sharedir)/extension/
+           \`\`\`
+        
+        2. Create the extension in your database:
+           \`\`\`sql
+           CREATE EXTENSION jsonb_merge;
+           \`\`\`
+        
+        ## Using PGXS (Recommended)
+        
+        If you have PostgreSQL development headers installed:
+        
+        \`\`\`bash
+        make install
+        \`\`\`
+        
+        Then in your database:
+        \`\`\`sql
+        CREATE EXTENSION jsonb_merge;
+        \`\`\`
+        
+        ## Verification
+        
+        Test the installation:
+        \`\`\`sql
+        SELECT jsonb_merge('{"a": 1}', '{"b": 2}');
+        -- Should return: {"a": 1, "b": 2}
+        \`\`\`
+        EOF
+        
+        # Create archive
+        cd build
+        tar -czf jsonb_merge-pg${{ matrix.pg_version }}.tar.gz pg${{ matrix.pg_version }}/
+        cd ..
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: jsonb_merge-pg${{ matrix.pg_version }}
+        path: build/jsonb_merge-pg${{ matrix.pg_version }}.tar.gz
+        retention-days: 30
+
+    - name: Clean up
+      if: always()
+      run: |
+        docker rm -f pg${{ matrix.pg_version }}_builder || true
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create release bundle
+      run: |
+        mkdir -p release
+        
+        # Copy individual PostgreSQL version archives
+        for pg_version in 12 13 14 15 16 17; do
+          if [ -f "artifacts/jsonb_merge-pg${pg_version}/jsonb_merge-pg${pg_version}.tar.gz" ]; then
+            cp "artifacts/jsonb_merge-pg${pg_version}/jsonb_merge-pg${pg_version}.tar.gz" release/
+          fi
+        done
+        
+        # Create a combined source archive
+        tar -czf release/jsonb_merge-source.tar.gz \
+          --exclude='.git*' \
+          --exclude='build' \
+          --exclude='artifacts' \
+          --exclude='release' \
+          .
+        
+        # Create checksums
+        cd release
+        sha256sum *.tar.gz > checksums.sha256
+        cd ..
+
+    - name: Extract version from tag
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        name: Release ${{ steps.version.outputs.VERSION }}
+        body: |
+          ## PostgreSQL JSONB Merge Extension ${{ steps.version.outputs.VERSION }}
+          
+          ### Installation
+          
+          Download the appropriate archive for your PostgreSQL version:
+          
+          - `jsonb_merge-pg12.tar.gz` - PostgreSQL 12
+          - `jsonb_merge-pg13.tar.gz` - PostgreSQL 13  
+          - `jsonb_merge-pg14.tar.gz` - PostgreSQL 14
+          - `jsonb_merge-pg15.tar.gz` - PostgreSQL 15
+          - `jsonb_merge-pg16.tar.gz` - PostgreSQL 16
+          - `jsonb_merge-pg17.tar.gz` - PostgreSQL 17
+          - `jsonb_merge-source.tar.gz` - Source code (build yourself)
+          
+          Each archive contains:
+          - Pre-compiled shared library (`.so` file)
+          - Extension control file
+          - SQL installation scripts
+          - Installation instructions (`INSTALL.md`)
+          - Source code and Makefile
+          
+          ### Usage
+          
+          ```sql
+          -- Create the extension
+          CREATE EXTENSION jsonb_merge;
+          
+          -- Basic merge
+          SELECT jsonb_merge('{"a": 1}', '{"b": 2}');
+          -- Returns: {"a": 1, "b": 2}
+          
+          -- Recursive merge
+          SELECT jsonb_merge('{"user": {"name": "John"}}', '{"user": {"age": 30}}');
+          -- Returns: {"user": {"name": "John", "age": 30}}
+          
+          -- Array merge (optional third parameter)
+          SELECT jsonb_merge('{"tags": [1, 2]}', '{"tags": [3, 4]}', true);
+          -- Returns: {"tags": [1, 2, 3, 4]}
+          ```
+          
+          ### Verification
+          
+          Verify the download integrity using the provided checksums:
+          ```bash
+          sha256sum -c checksums.sha256
+          ```
+        files: |
+          release/*.tar.gz
+          release/checksums.sha256
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup:
+    name: Cleanup old artifacts
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Delete old artifacts
+      uses: geekyeggo/delete-artifact@v4
+      with:
+        name: |
+          jsonb_merge-pg*
+        failOnError: false
+        useGlob: true
+        # Keep artifacts for 7 days
+        skipRecent: 7
