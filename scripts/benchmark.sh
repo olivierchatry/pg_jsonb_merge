@@ -44,10 +44,20 @@ setup_environment() {
         exit 1
     fi
     
+    # Check for docker-compose or docker compose
+    if docker compose version >/dev/null 2>&1; then
+        DOCKER_COMPOSE="docker compose"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        print_error "Neither docker-compose nor docker compose is available."
+        exit 1
+    fi
+    
     # Start container if not running
     if ! docker exec $CONTAINER_NAME pg_isready -U postgres -d postgres >/dev/null 2>&1; then
         print_benchmark "Starting PostgreSQL container..."
-        docker-compose up -d >/dev/null 2>&1
+        $DOCKER_COMPOSE up -d >/dev/null 2>&1
         sleep 3
         
         # Wait for PostgreSQL to be ready

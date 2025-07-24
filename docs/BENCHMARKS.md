@@ -39,7 +39,7 @@ For comprehensive benchmarking:
 You can run custom benchmarks using the PostgreSQL container:
 ```bash
 # Start container
-docker-compose up -d
+docker compose up -d
 
 # Install extension (done automatically by test script)
 ./test/docker-test.sh

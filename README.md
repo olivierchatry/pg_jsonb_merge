@@ -42,44 +42,28 @@ make clean
 make install
 ```
 
-### Deploy
+### Install
 
-To deploy the extension to your PostgreSQL installation, you can use the install command above.
-The extension will be installed to your PostgreSQL installation's library directory.
+To install the extension into your PostgreSQL installation, you can use the `install` command. This will place the extension in the appropriate directory for your PostgreSQL server.
 
-- **Deploy Release Build**:
-  ```bash
-  make deploy
-  ```
-
-- **Deploy Debug Build**:
-  ```bash
-  make deploy-debug
-  ```
+```bash
+# Install the extension (requires PostgreSQL development headers)
+make install
+```
 
 ### Test
 
-The project includes a comprehensive test suite.
-
-- **Local Test**:
-  This requires a local PostgreSQL server and the `psql` client.
-  ```bash
-  make test
-  ```
-
-- **Dockerized Test**:
-  This is the recommended way to test, as it runs in a clean, isolated environment.
-
-  ```bash
-  make test-docker
-  ```
+The project includes a comprehensive test suite. The recommended way to test is using Docker, as it runs in a clean, isolated environment.
+```bash
+make test-docker
+```
 
 ### Performance Benchmarks
 
 The extension includes a dedicated performance benchmarking script to help track performance and catch regressions:
 
 ```bash
-./benchmark.sh
+./scripts/benchmark.sh
 ```
 
 This will:
@@ -89,7 +73,7 @@ This will:
 - Compare against PostgreSQL's built-in operators
 - Display detailed timing results
 
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance information and baseline results.
+See [BENCHMARKS.md](docs/BENCHMARKS.md) for detailed performance information and baseline results.
 
 ## Examples
 

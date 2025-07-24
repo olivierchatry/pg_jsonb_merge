@@ -43,13 +43,27 @@ check_docker() {
     print_success "🐋 Docker is running"
 }
 
-# Function to check if docker-compose is available
+# Function to check if docker-compose or docker compose is available
 check_docker_compose() {
-    if ! command -v docker-compose >/dev/null 2>&1; then
-        print_error "🐙 docker-compose is not installed. Please install docker-compose and try again."
+    if command -v docker-compose >/dev/null 2>&1; then
+        USE_DOCKER_COMPOSE=true
+        print_success "🐙 docker-compose is available"
+    elif docker compose version >/dev/null 2>&1; then
+        USE_DOCKER_COMPOSE=false
+        print_success "🐙 docker compose is available"
+    else
+        print_error "🐙 Neither docker-compose nor docker compose is available. Please install one of them and try again."
         exit 1
     fi
-    print_success "🐙 docker-compose is available"
+}
+
+# Wrapper function to run docker-compose commands
+run_docker_compose() {
+    if [ "$USE_DOCKER_COMPOSE" = true ]; then
+        docker-compose "$@"
+    else
+        docker compose "$@"
+    fi
 }
 
 # Function to wait for PostgreSQL to be ready
@@ -75,12 +89,7 @@ wait_for_postgres() {
 
 # Function to build and copy extension to container
 install_extension() {
-    print_status "🔨 Building extension locally..."
-    
-    # Build the extension locally first
-    make >/dev/null 2>&1
-    
-    print_status "🔍 Detecting PostgreSQL paths in container..."
+    print_status " Detecting PostgreSQL paths in container..."
     
     # Get PostgreSQL paths from inside the container
     CONTAINER_PKGLIBDIR=$(docker exec $CONTAINER_NAME pg_config --pkglibdir 2>/dev/null || echo "/usr/local/lib/postgresql")
@@ -161,20 +170,27 @@ run_tests() {
             echo -e "  ❌ ${RED}$test_description${NC}"
             echo -e "     ${YELLOW}📋 Test Details:${NC}"
             
-            # Extract the actual result (the first result after "result" header)
-            local actual_result=$(echo "$test_output" | grep -A3 "result" | grep -v "result" | grep -v "^--" | grep -v "^(" | head -1 | xargs)
+            # Extract the actual result - look for the first result after running the test
+            local actual_result=$(echo "$test_output" | grep -A 10 "result" | grep -E '^\s*\{.*\}' | head -1 | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+            
+            # If no JSON result found, try to get any non-empty line after "result"
+            if [ -z "$actual_result" ]; then
+                actual_result=$(echo "$test_output" | grep -A 5 "result" | grep -v "result" | grep -v "^--" | grep -v "^(" | grep -v "^$" | head -1 | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+            fi
             
             # Try to extract the inputs from the test file
             local test_file_content=$(cat "./test/$(basename $test_file)")
             
-            # Extract inputs - handle multi-line jsonb_merge calls
-            local jsonb_call=$(echo "$test_file_content" | grep -A5 "jsonb_merge" | head -6 | tr '\n' ' ' | sed 's/SELECT jsonb_merge(//' | sed 's/) AS.*//' | sed 's/) =.*//')
-            local input1=$(echo "$jsonb_call" | cut -d',' -f1 | xargs | sed "s/^'//; s/'$//")
-            local input2=$(echo "$jsonb_call" | cut -d',' -f2 | xargs | sed "s/^'//; s/'$//")
+            # Extract inputs - look for the first jsonb_merge call
+            local input1=$(echo "$test_file_content" | grep -A 10 "jsonb_merge" | grep -o "'[^']*'" | head -1 | sed "s/^'//; s/'$//")
+            local input2=$(echo "$test_file_content" | grep -A 10 "jsonb_merge" | grep -o "'[^']*'" | head -2 | tail -1 | sed "s/^'//; s/'$//")
             
-            # Clean up inputs - remove leading/trailing whitespace and quotes
-            input1=$(echo "$input1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed "s/^'//; s/'$//" | sed 's/^"//; s/"$//')
-            input2=$(echo "$input2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed "s/^'//; s/'$//" | sed 's/^"//; s/"$//')
+            # If that didn't work, try a different approach for multiline JSON
+            if [ -z "$input1" ] || [ -z "$input2" ]; then
+                local jsonb_section=$(echo "$test_file_content" | sed -n '/jsonb_merge(/,/) AS result/p' | tr '\n' ' ')
+                input1=$(echo "$jsonb_section" | grep -o "'[^']*'" | head -1 | sed "s/^'//; s/'$//")
+                input2=$(echo "$jsonb_section" | grep -o "'[^']*'" | head -2 | tail -1 | sed "s/^'//; s/'$//")
+            fi
             
             # Try to extract the expected value from the test file
             local expected_result=$(echo "$test_file_content" | grep -o "= '[^']*'" | head -1 | sed "s/= '//; s/'$//")
@@ -186,7 +202,7 @@ run_tests() {
             
             # If still empty, try to extract JSON pattern
             if [ -z "$expected_result" ]; then
-                expected_result=$(echo "$test_file_content" | grep -o '= {[^}]*}' | head -1 | sed 's/= //')
+                expected_result=$(echo "$test_file_content" | grep -o "= '{[^}]*}'" | head -1 | sed 's/= //')
             fi
             
             # Show inputs, expected, and actual in a clear flow
@@ -203,6 +219,8 @@ run_tests() {
             
             if [ ! -z "$actual_result" ]; then
                 echo -e "     ${RED}🔍 Actual:${NC}   $actual_result"
+            else
+                echo -e "     ${RED}🔍 Actual:${NC}   (could not extract result)"
             fi
             
             # Show error messages if any
@@ -210,6 +228,10 @@ run_tests() {
             if [ ! -z "$error_msg" ]; then
                 echo -e "     ${RED}💥 Error:${NC}    $error_msg"
             fi
+            
+            # Show full test output for debugging if needed
+            echo -e "     ${YELLOW}🐛 Full test output:${NC}"
+            echo "$test_output" | sed 's/^/        /'
             
             echo ""
             all_tests_passed=false
@@ -243,11 +265,11 @@ cleanup() {
     # Prompt user to keep container running
     read -p "🤔 Keep PostgreSQL container running for manual testing? [y/N]: " answer
     if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
-        docker-compose down --volumes >/dev/null 2>&1
+        run_docker_compose down --volumes >/dev/null 2>&1
         print_success "✨ Cleanup completed"
     else
         print_status "🏃 Container '$CONTAINER_NAME' is still running."
-        print_status "🛑 To stop it, run: docker-compose down --volumes"
+        print_status "🛑 To stop it, run: docker-compose down --volumes (or docker compose down --volumes)"
     fi
 }
 
@@ -260,11 +282,11 @@ main() {
     
     # Stop and remove any existing containers to ensure clean start
     print_status "🧹 Cleaning up any existing containers..."
-    docker-compose down --volumes 2>/dev/null || true
+    run_docker_compose down --volumes 2>/dev/null || true
     
     # Start PostgreSQL container using docker-compose
     print_status "🐘 Starting PostgreSQL container..."
-    docker-compose up -d --build >/dev/null 2>&1
+    run_docker_compose up -d --build >/dev/null 2>&1
     
     wait_for_postgres
     
