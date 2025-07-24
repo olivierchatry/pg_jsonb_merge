@@ -92,14 +92,12 @@ install_extension() {
     print_status "  Extension dir: $CONTAINER_EXTENSIONDIR"
     
     print_status "Installing build dependencies in container..."
-    docker exec $CONTAINER_NAME apk add --no-cache build-base postgresql-dev make clang llvm lld
-    
-    # Create the expected LLVM directory structure and symlinks
-    docker exec $CONTAINER_NAME mkdir -p /usr/lib/llvm19/bin
-    docker exec $CONTAINER_NAME ln -sf /usr/bin/clang /usr/bin/clang-19
-    docker exec $CONTAINER_NAME ln -sf /usr/bin/llvm-lto /usr/lib/llvm19/bin/llvm-lto
-    docker exec $CONTAINER_NAME ln -sf /usr/bin/llvm-link /usr/lib/llvm19/bin/llvm-link
-    docker exec $CONTAINER_NAME ln -sf /usr/bin/ld.lld /usr/lib/llvm19/bin/ld.lld
+    # Install only the essential packages needed for building PostgreSQL extensions
+    docker exec $CONTAINER_NAME apk add --no-cache \
+        gcc \
+        musl-dev \
+        make \
+        postgresql17-dev
     
     print_status "Copying and building extension in container..."
     
@@ -108,7 +106,7 @@ install_extension() {
     
     # Build and install inside the container using PGXS
     docker exec $CONTAINER_NAME make -C /tmp/ clean
-    docker exec $CONTAINER_NAME make -C /tmp/ install
+    docker exec $CONTAINER_NAME sh -c "cd /tmp && make install with_llvm=no"
     
     print_success "Extension built and installed in container"
 }
