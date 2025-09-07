@@ -1,105 +1,85 @@
-# PostgreSQL JSONB Merge Extension
+# jsonb_merge (PostgreSQL extension)
 
-This PostgreSQL extension provides a C function `jsonb_merge(jsonb, jsonb)` that recursively merges two JSONB objects.
+`jsonb_merge(jsonb, jsonb [, boolean]) -> jsonb`
 
-## Merge Logic
+Recursive JSONB merge with optional array concatenation. Written in C.
 
-The `jsonb_merge` function follows these rules:
+## Behavior
 
-- **Objects are merged recursively**: If a key is present in both JSONB objects and both values are objects, the function will recursively merge them.
-- **Conflicts are resolved by the second object**: If a key exists in both objects and the values are not both objects, the value from the second object will be used.
-- **Keys from both objects are preserved**: If a key is present in only one of the objects, it will be included in the final result.
-- **Arrays and other types are overwritten**: The merge logic is designed for objects. If the values are arrays, strings, numbers, etc., the value from the second object will replace the value from the first.
+Rules:
 
-## Features
+1. Objects are merged recursively.
+2. If a key exists in both and both values are objects, merge them; otherwise the second value wins.
+3. Keys present in only one input are kept.
+4. Arrays: default call (`jsonb_merge(a,b)`) concatenates arrays. Use the 3‑arg form with `false` to replace instead of concatenate.
+5. Scalars / non-objects at a position: if one side is not an object, that side just overwrites (second wins at the top level unless only the first is an object).
+6. NULL handling: `jsonb_merge(NULL,x)=x`, `jsonb_merge(x,NULL)=x`, `jsonb_merge(NULL,NULL)=NULL`.
 
-- **Recursive Merge**: Deeply merges nested JSONB objects.
-- **Configurable Array Merge**: Choose to merge or replace arrays with boolean flag.
-- **C Implementation**: High-performance merge logic written in C.
-- **Debug and Release Builds**: `Makefile` supports both debug and release build modes.
-- **Dockerized Testing**: Includes a Docker setup for isolated testing.
-- **Performance Benchmarks**: Built-in benchmarking for regression testing.
-- **Cross-Platform**: Builds on macOS and Linux.
+This differs from the built‑in `||` operator which is shallow (no deep merge, arrays always replaced).
 
-## Getting Started
+## Functions
 
-### Prerequisites
+* `jsonb_merge(a jsonb, b jsonb)` – recursive merge, arrays concatenated.
+* `jsonb_merge(a jsonb, b jsonb, merge_arrays boolean)` – set array policy explicitly.
+Both are `IMMUTABLE`.
 
-- PostgreSQL (with `pg_config`)
-- Docker (for containerized testing)
-- `make`
+## Build & Install
 
-### Build
+Prerequisites: PostgreSQL dev headers (`pg_config`), `make`. Optional: Docker for isolated tests.
 
 ```bash
-# Build the extension
-make all
-
-# Clean build artifacts
-make clean
-
-# Install the extension (requires PostgreSQL development headers)
-make install
+make            # build
+make install    # install into PG
+make clean      # remove artifacts
 ```
 
-### Install
-
-To install the extension into your PostgreSQL installation, you can use the `install` command. This will place the extension in the appropriate directory for your PostgreSQL server.
-
-```bash
-# Install the extension (requires PostgreSQL development headers)
-make install
-```
-
-### Test
-
-The project includes a comprehensive test suite. The recommended way to test is using Docker, as it runs in a clean, isolated environment.
-```bash
-make test-docker
-```
-
-### Performance Benchmarks
-
-The extension includes a dedicated performance benchmarking script to help track performance and catch regressions:
-
-```bash
-./scripts/benchmark.sh
-```
-
-This will:
-- Set up a clean testing environment
-- Build and install the extension
-- Run comprehensive performance tests
-- Compare against PostgreSQL's built-in operators
-- Display detailed timing results
-
-See [BENCHMARKS.md](docs/BENCHMARKS.md) for detailed performance information and baseline results.
-
-## Examples
-
-### Basic Merge
-
+In psql:
+ 
 ```sql
-SELECT jsonb_merge(
-  '{"a": 1, "b": 2}',
-  '{"b": 3, "c": 4}'
-);
--- Result: {"a": 1, "b": 3, "c": 4}
+CREATE EXTENSION jsonb_merge;
 ```
 
-### Recursive Merge
+## Quick Examples
 
+Basic:
+ 
 ```sql
-SELECT jsonb_merge(
-  '{"user": {"name": "John", "age": 30}}',
-  '{"user": {"age": 31, "email": "john@example.com"}}'
-);
--- Result: {"user": {"name": "John", "age": 31, "email": "john@example.com"}}
+SELECT jsonb_merge('{"a":1,"b":2}', '{"b":4,"c":3}');
+-- {"a":1,"b":4,"c":3}
 ```
 
-## Development
+Deep:
+ 
+```sql
+SELECT jsonb_merge('{"user":{"name":"John","age":30}}', '{"user":{"age":31,"email":"john@example.com"}}');
+-- {"user":{"name":"John","age":31,"email":"john@example.com"}}
+```
 
-To clean the build artifacts:
+Array concat (default):
+ 
+```sql
+SELECT jsonb_merge('{"a":[1,2]}', '{"a":[3,4]}');
+-- {"a":[1,2,3,4]}
+```
+
+Array replace:
+ 
+```sql
+SELECT jsonb_merge('{"a":[1,2]}', '{"a":[3,4]}', false);
+-- {"a":[3,4]}
+```
+
+## Testing
+
 ```bash
-make clean
+make test-docker         # run test suite in container
+./test/docker-test.sh    # alt entrypoint
 ```
+
+## Benchmarks
+
+See `docs/BENCHMARKS.md`. Includes comparison vs `||` and deep / array cases.
+
+## License
+
+MIT (see `LICENSE`).
