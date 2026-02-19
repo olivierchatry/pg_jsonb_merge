@@ -393,5 +393,3 @@ jobs:
           jsonb_merge-pg*
         failOnError: false
         useGlob: true
-        # Keep artifacts for 7 days
-        skipRecent: 7
