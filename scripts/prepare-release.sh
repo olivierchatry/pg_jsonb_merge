@@ -103,6 +103,7 @@ if [ ! -f "$RELEASE_NOTES" ]; then
 - [x] PostgreSQL 15
 - [x] PostgreSQL 16
 - [x] PostgreSQL 17
+- [x] PostgreSQL 18
 
 ## Breaking Changes
 - None
