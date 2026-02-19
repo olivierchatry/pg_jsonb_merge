@@ -10,6 +10,9 @@ on:
 env:
   EXTENSION_NAME: jsonb_merge
 
+permissions:
+  contents: write
+
 jobs:
   test:
     name: Test PostgreSQL ${{ matrix.pg_version }}
@@ -293,7 +296,7 @@ jobs:
         mkdir -p release
         
         # Copy individual PostgreSQL version archives
-        for pg_version in 12 13 14 15 16 17; do
+        for pg_version in 12 13 14 15 16 17 18; do
           if [ -f "artifacts/jsonb_merge-pg${pg_version}/jsonb_merge-pg${pg_version}.tar.gz" ]; then
             cp "artifacts/jsonb_merge-pg${pg_version}/jsonb_merge-pg${pg_version}.tar.gz" release/
           fi
@@ -334,6 +337,7 @@ jobs:
           - `jsonb_merge-pg15.tar.gz` - PostgreSQL 15
           - `jsonb_merge-pg16.tar.gz` - PostgreSQL 16
           - `jsonb_merge-pg17.tar.gz` - PostgreSQL 17
+          - `jsonb_merge-pg18.tar.gz` - PostgreSQL 18
           - `jsonb_merge-source.tar.gz` - Source code (build yourself)
           
           Each archive contains:
