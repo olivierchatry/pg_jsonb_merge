@@ -128,54 +128,54 @@ run_all_benchmarks() {
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..10000 LOOP
+            FOR i IN 1..1000000 LOOP
                 result := jsonb_merge('{\"a\": 1, \"b\": 2}', '{\"c\": 3, \"d\": 4}');
             END LOOP;
         END \$\$;
-    " 10000
+    " 1000000
     
     # Benchmark 2: Deep nested merges  
     run_benchmark "Deep nested object merge" "
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..1000 LOOP
+            FOR i IN 1..100000 LOOP
                 result := jsonb_merge('{\"a\": {\"b\": {\"c\": {\"d\": {\"e\": 1}}}}}', '{\"a\": {\"b\": {\"c\": {\"d\": {\"f\": 2}}}}}');
             END LOOP;
         END \$\$;
-    " 1000
+    " 100000
     
     # Benchmark 3: Large objects
     run_benchmark "Large object merge (40 keys each)" "
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..500 LOOP
+            FOR i IN 1..50000 LOOP
                 result := jsonb_merge(
                     '{\"k1\": 1, \"k2\": 2, \"k3\": 3, \"k4\": 4, \"k5\": 5, \"k6\": 6, \"k7\": 7, \"k8\": 8, \"k9\": 9, \"k10\": 10, \"k11\": 11, \"k12\": 12, \"k13\": 13, \"k14\": 14, \"k15\": 15, \"k16\": 16, \"k17\": 17, \"k18\": 18, \"k19\": 19, \"k20\": 20}',
                     '{\"k21\": 21, \"k22\": 22, \"k23\": 23, \"k24\": 24, \"k25\": 25, \"k26\": 26, \"k27\": 27, \"k28\": 28, \"k29\": 29, \"k30\": 30, \"k31\": 31, \"k32\": 32, \"k33\": 33, \"k34\": 34, \"k35\": 35, \"k36\": 36, \"k37\": 37, \"k38\": 38, \"k39\": 39, \"k40\": 40}'
                 );
             END LOOP;
         END \$\$;
-    " 500
+    " 50000
     
     # Benchmark 4: Array merging
     run_benchmark "Array merge operations" "
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..1000 LOOP
+            FOR i IN 1..100000 LOOP
                 result := jsonb_merge('{\"data\": [1, 2, 3, 4, 5]}', '{\"data\": [6, 7, 8, 9, 10]}', true);
             END LOOP;
         END \$\$;
-    " 1000
+    " 100000
     
     # Benchmark 5: Mixed complex operations
     run_benchmark "Complex mixed structures" "
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..100 LOOP
+            FOR i IN 1..10000 LOOP
                 result := jsonb_merge(
                     '{\"users\": [{\"id\": 1, \"name\": \"Alice\"}, {\"id\": 2, \"name\": \"Bob\"}], \"meta\": {\"count\": 2, \"settings\": {\"theme\": \"dark\", \"lang\": \"en\"}}, \"tags\": [\"user\", \"admin\"]}',
                     '{\"users\": [{\"id\": 3, \"name\": \"Charlie\"}], \"meta\": {\"version\": \"1.0\", \"settings\": {\"debug\": true}}, \"tags\": [\"guest\"], \"extra\": {\"created\": \"2025-01-01\"}}',
@@ -183,7 +183,7 @@ run_all_benchmarks() {
                 );
             END LOOP;
         END \$\$;
-    " 100
+    " 10000
     
     # Benchmark 6: Comparison with built-in operator
     echo -e "${CYAN}📈 Performance Comparison${NC}"
@@ -193,22 +193,22 @@ run_all_benchmarks() {
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..5000 LOOP
+            FOR i IN 1..500000 LOOP
                 result := jsonb_merge('{\"a\": 1, \"b\": 2}', '{\"c\": 3, \"d\": 4}');
             END LOOP;
         END \$\$;
-    " 5000
+    " 500000
     
     # Built-in || operator (for comparison)
     run_benchmark "Built-in || operator" "
         DO \$\$
         DECLARE i integer; result jsonb;
         BEGIN
-            FOR i IN 1..5000 LOOP
+            FOR i IN 1..500000 LOOP
                 result := '{\"a\": 1, \"b\": 2}'::jsonb || '{\"c\": 3, \"d\": 4}'::jsonb;
             END LOOP;
         END \$\$;
-    " 5000
+    " 500000
     
     echo -e "${GREEN}🎯 Benchmark suite completed!${NC}"
     echo -e "${YELLOW}💡 Tips:${NC}"

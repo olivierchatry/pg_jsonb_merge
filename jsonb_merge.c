@@ -18,6 +18,19 @@ static Datum jsonb_merge_worker(PG_FUNCTION_ARGS, bool merge_arrays);
 static void merge_arrays_into_state(JsonbContainer *ca, JsonbContainer *cb, JsonbParseState **state);
 
 /*
+ * Compare two JSONB string values using PostgreSQL's JSONB key ordering:
+ * first by length, then lexicographically. This matches the sort order that
+ * JSONB uses internally for object keys.
+ */
+static inline int
+compare_jsonb_keys(const JsonbValue *a, const JsonbValue *b)
+{
+    if (a->val.string.len != b->val.string.len)
+        return (a->val.string.len > b->val.string.len) ? 1 : -1;
+    return memcmp(a->val.string.val, b->val.string.val, a->val.string.len);
+}
+
+/*
  * Helper function to merge two arrays into the parse state
  */
 static void
@@ -48,9 +61,50 @@ merge_arrays_into_state(JsonbContainer *ca, JsonbContainer *cb, JsonbParseState 
     (void) pushJsonbValue(state, WJB_END_ARRAY, NULL);
 }
 
+/*
+ * Push a merged value for a key that exists in both objects, handling
+ * recursive object merge, array concatenation, and scalar replacement.
+ */
+static void
+merge_common_key_value(JsonbValue *val_a, JsonbValue *val_b,
+                       bool merge_arrays, JsonbParseState **state)
+{
+    if (val_a->type == jbvBinary && val_b->type == jbvBinary)
+    {
+        JsonbContainer *container_a = val_a->val.binary.data;
+        JsonbContainer *container_b = val_b->val.binary.data;
+
+        if (JsonContainerIsObject(container_a) && JsonContainerIsObject(container_b))
+        {
+            /* Recursively merge objects */
+            JsonbValue *merged = jsonb_merge_recursive(container_a, container_b, merge_arrays);
+            (void) pushJsonbValue(state, WJB_VALUE, merged);
+        }
+        else if (JsonContainerIsArray(container_a) && JsonContainerIsArray(container_b) && merge_arrays)
+        {
+            /* Merge arrays if enabled */
+            merge_arrays_into_state(container_a, container_b, state);
+        }
+        else
+        {
+            /* Different container types or array merge disabled - second value wins */
+            (void) pushJsonbValue(state, WJB_VALUE, val_b);
+        }
+    }
+    else
+    {
+        /* Not both containers - second value wins */
+        (void) pushJsonbValue(state, WJB_VALUE, val_b);
+    }
+}
 
 /*
- * Simplified recursive merge helper function
+ * Recursive merge using sorted-key merge.
+ *
+ * PostgreSQL stores JSONB object keys in sorted order (by length, then
+ * lexicographically). We exploit this by iterating both objects simultaneously
+ * in a single merge-sort-style pass, achieving O(n + m) complexity instead of
+ * the O(m·log n + n·log m) of the lookup-based approach.
  */
 static JsonbValue *
 jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb, bool merge_arrays)
@@ -58,8 +112,8 @@ jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb, bool merge_array
     JsonbParseState *state = NULL;
     JsonbValue *res;
     JsonbIterator *ita, *itb;
-    JsonbIteratorToken type_token;
-    JsonbValue key_val, val_val;
+    JsonbIteratorToken toka, tokb;
+    JsonbValue key_a, val_a, key_b, val_b;
 
     /* Early returns for non-object inputs */
     if (jca == NULL || !JsonContainerIsObject(jca))
@@ -86,84 +140,68 @@ jsonb_merge_recursive(JsonbContainer *jca, JsonbContainer *jcb, bool merge_array
     /* Start building the merged object */
     (void) pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
 
-    /* Process all keys from first object */
     ita = JsonbIteratorInit(jca);
-    while ((type_token = JsonbIteratorNext(&ita, &key_val, true)) != WJB_DONE)
+    itb = JsonbIteratorInit(jcb);
+
+    /* Skip the WJB_BEGIN_OBJECT tokens */
+    toka = JsonbIteratorNext(&ita, &key_a, true);
+    tokb = JsonbIteratorNext(&itb, &key_b, true);
+
+    /* Read first key from each object */
+    toka = JsonbIteratorNext(&ita, &key_a, true);
+    tokb = JsonbIteratorNext(&itb, &key_b, true);
+
+    /* Core merge loop: walk both sorted key streams simultaneously */
+    while (toka == WJB_KEY && tokb == WJB_KEY)
     {
-        if (type_token == WJB_KEY)
+        int cmp = compare_jsonb_keys(&key_a, &key_b);
+
+        if (cmp < 0)
         {
-            JsonbValue *val_from_b;
+            /* Key only in A - emit it and advance A */
+            toka = JsonbIteratorNext(&ita, &val_a, true);
+            (void) pushJsonbValue(&state, WJB_KEY, &key_a);
+            (void) pushJsonbValue(&state, WJB_VALUE, &val_a);
+            toka = JsonbIteratorNext(&ita, &key_a, true);
+        }
+        else if (cmp > 0)
+        {
+            /* Key only in B - emit it and advance B */
+            tokb = JsonbIteratorNext(&itb, &val_b, true);
+            (void) pushJsonbValue(&state, WJB_KEY, &key_b);
+            (void) pushJsonbValue(&state, WJB_VALUE, &val_b);
+            tokb = JsonbIteratorNext(&itb, &key_b, true);
+        }
+        else
+        {
+            /* Key in both - consume values from both, merge, advance both */
+            toka = JsonbIteratorNext(&ita, &val_a, true);
+            tokb = JsonbIteratorNext(&itb, &val_b, true);
 
-            /* Get the corresponding value */
-            type_token = JsonbIteratorNext(&ita, &val_val, true);
+            (void) pushJsonbValue(&state, WJB_KEY, &key_a);
+            merge_common_key_value(&val_a, &val_b, merge_arrays, &state);
 
-            /* Look up this key in the second object */
-            val_from_b = findJsonbValueFromContainer(jcb, JB_FOBJECT, &key_val);
-
-            /* Add the key to result */
-            (void) pushJsonbValue(&state, WJB_KEY, &key_val);
-
-            if (val_from_b != NULL)
-            {
-                /* Key exists in both objects - decide how to merge */
-                if (val_val.type == jbvBinary && val_from_b->type == jbvBinary)
-                {
-                    JsonbContainer *container_a = val_val.val.binary.data;
-                    JsonbContainer *container_b = val_from_b->val.binary.data;
-
-                    if (JsonContainerIsObject(container_a) && JsonContainerIsObject(container_b))
-                    {
-                        /* Recursively merge objects */
-                        JsonbValue *merged = jsonb_merge_recursive(container_a, container_b, merge_arrays);
-                        (void) pushJsonbValue(&state, WJB_VALUE, merged);
-                    }
-                    else if (JsonContainerIsArray(container_a) && JsonContainerIsArray(container_b) && merge_arrays)
-                    {
-                        /* Merge arrays if enabled */
-                        merge_arrays_into_state(container_a, container_b, &state);
-                    }
-                    else
-                    {
-                        /* Different container types or array merge disabled - second value wins */
-                        (void) pushJsonbValue(&state, WJB_VALUE, val_from_b);
-                    }
-                }
-                else
-                {
-                    /* Not both containers - second value wins */
-                    (void) pushJsonbValue(&state, WJB_VALUE, val_from_b);
-                }
-            }
-            else
-            {
-                /* Key only exists in first object */
-                (void) pushJsonbValue(&state, WJB_VALUE, &val_val);
-            }
+            toka = JsonbIteratorNext(&ita, &key_a, true);
+            tokb = JsonbIteratorNext(&itb, &key_b, true);
         }
     }
 
-    /* Add keys that only exist in second object */
-    itb = JsonbIteratorInit(jcb);
-    while ((type_token = JsonbIteratorNext(&itb, &key_val, true)) != WJB_DONE)
+    /* Drain remaining keys from A */
+    while (toka == WJB_KEY)
     {
-        if (type_token == WJB_KEY)
-        {
-            JsonbValue *val_from_a;
+        toka = JsonbIteratorNext(&ita, &val_a, true);
+        (void) pushJsonbValue(&state, WJB_KEY, &key_a);
+        (void) pushJsonbValue(&state, WJB_VALUE, &val_a);
+        toka = JsonbIteratorNext(&ita, &key_a, true);
+    }
 
-            /* Get the value */
-            type_token = JsonbIteratorNext(&itb, &val_val, true);
-
-            /* Check if this key was already processed (exists in first object) */
-            val_from_a = findJsonbValueFromContainer(jca, JB_FOBJECT, &key_val);
-
-            if (val_from_a == NULL)
-            {
-                /* Key only exists in second object - add it */
-                (void) pushJsonbValue(&state, WJB_KEY, &key_val);
-                (void) pushJsonbValue(&state, WJB_VALUE, &val_val);
-            }
-            /* If key exists in both, we already handled it in the first loop */
-        }
+    /* Drain remaining keys from B */
+    while (tokb == WJB_KEY)
+    {
+        tokb = JsonbIteratorNext(&itb, &val_b, true);
+        (void) pushJsonbValue(&state, WJB_KEY, &key_b);
+        (void) pushJsonbValue(&state, WJB_VALUE, &val_b);
+        tokb = JsonbIteratorNext(&itb, &key_b, true);
     }
 
     /* Complete the object */
