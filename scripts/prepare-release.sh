@@ -64,7 +64,7 @@ if [ -f "$CONTROL_FILE" ]; then
     
     if [ "$current_version" != "$clean_version" ]; then
         print_status "Updating version in $CONTROL_FILE from $current_version to $clean_version"
-        sed -i "s/default_version = '.*'/default_version = '$clean_version'/" "$CONTROL_FILE"
+        sed -i '' "s/default_version = '.*'/default_version = '$clean_version'/" "$CONTROL_FILE"
     fi
 fi
 
@@ -86,16 +86,55 @@ fi
 # Create release notes template
 RELEASE_NOTES="RELEASE_NOTES_${VERSION}.md"
 if [ ! -f "$RELEASE_NOTES" ]; then
-    print_status "Creating release notes template: $RELEASE_NOTES"
+    print_status "Creating release notes: $RELEASE_NOTES"
+
+    # Find the previous tag to generate changelog
+    PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
+    if [ -n "$PREV_TAG" ]; then
+        CHANGELOG=$(git --no-pager log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" 2>/dev/null)
+        DIFF_RANGE="${PREV_TAG}..HEAD"
+    else
+        CHANGELOG=$(git --no-pager log --pretty=format:"- %s (%h)" 2>/dev/null)
+        DIFF_RANGE=""
+    fi
+
+    # Categorize commits
+    FEATURES=$(echo "$CHANGELOG" | grep -iE "^- (feat|add|support)" || true)
+    FIXES=$(echo "$CHANGELOG" | grep -iE "^- (fix|bug|patch|hotfix)" || true)
+    PERF=$(echo "$CHANGELOG" | grep -iE "^- (perf|optim|bench|speed)" || true)
+    CHORE=$(echo "$CHANGELOG" | grep -iE "^- (chore|doc|ci|refactor|merge|style|test)" || true)
+
     cat > "$RELEASE_NOTES" << EOF
 # Release Notes for $VERSION
 
-## Changes
-- [ ] New features
-- [ ] Bug fixes  
-- [ ] Performance improvements
-- [ ] Documentation updates
+## What's Changed${PREV_TAG:+ (since $PREV_TAG)}
 
+EOF
+
+    {
+        if [ -n "$FEATURES" ]; then
+            echo "### Features"
+            echo "$FEATURES"
+            echo ""
+        fi
+        if [ -n "$FIXES" ]; then
+            echo "### Bug Fixes"
+            echo "$FIXES"
+            echo ""
+        fi
+        if [ -n "$PERF" ]; then
+            echo "### Performance"
+            echo "$PERF"
+            echo ""
+        fi
+        if [ -n "$CHORE" ]; then
+            echo "### Maintenance"
+            echo "$CHORE"
+            echo ""
+        fi
+    } >> "$RELEASE_NOTES"
+
+    cat >> "$RELEASE_NOTES" << EOF
 ## PostgreSQL Compatibility
 - [x] PostgreSQL 12
 - [x] PostgreSQL 13
@@ -117,7 +156,7 @@ SELECT jsonb_merge('{"a": 1}', '{"b": 2}');
 -- Expected: {"a": 1, "b": 2}
 \`\`\`
 EOF
-    print_success "Release notes template created. Please edit $RELEASE_NOTES"
+    print_success "Release notes created. Please review $RELEASE_NOTES"
 fi
 
 # Check if tag already exists
