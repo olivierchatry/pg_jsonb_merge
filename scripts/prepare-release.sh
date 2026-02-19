@@ -65,6 +65,20 @@ if [ -f "$CONTROL_FILE" ]; then
     if [ "$current_version" != "$clean_version" ]; then
         print_status "Updating version in $CONTROL_FILE from $current_version to $clean_version"
         sed -i '' "s/default_version = '.*'/default_version = '$clean_version'/" "$CONTROL_FILE"
+
+        # Create new SQL installation script for the new version
+        SQL_OLD="sql/jsonb_merge--${current_version}.sql"
+        SQL_NEW="sql/jsonb_merge--${clean_version}.sql"
+        if [ -f "$SQL_OLD" ] && [ ! -f "$SQL_NEW" ]; then
+            cp "$SQL_OLD" "$SQL_NEW"
+            print_success "Created $SQL_NEW from $SQL_OLD"
+        fi
+
+        # Update Makefile DATA line to include the new SQL file
+        if ! grep -q "$SQL_NEW" Makefile; then
+            sed -i '' "s|DATA = .*|& sql/\$(EXTENSION)--${clean_version}.sql|" Makefile
+            print_success "Updated Makefile to include $SQL_NEW"
+        fi
     fi
 fi
 
