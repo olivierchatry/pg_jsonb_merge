@@ -1,5 +1,5 @@
 # jsonb_merge extension
 comment = 'JSONB merge extension'
-default_version = '1.1.0'
+default_version = '1.2.0'
 module_pathname = '$libdir/jsonb_merge'
 relocatable = true

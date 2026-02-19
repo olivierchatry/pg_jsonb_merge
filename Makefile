@@ -2,7 +2,7 @@
 
 # Extension configuration
 EXTENSION = jsonb_merge
-DATA = sql/$(EXTENSION)--1.0.sql sql/$(EXTENSION)--1.1.0.sql
+DATA = sql/$(EXTENSION)--1.0.sql sql/$(EXTENSION)--1.1.0.sql sql/$(EXTENSION)--1.2.0.sql
 MODULES = jsonb_merge
 
 # Source files
