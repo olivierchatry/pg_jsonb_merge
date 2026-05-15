@@ -8,7 +8,7 @@
 | What you need             | Best method                    | Why                                        |
 | ------------------------- | ------------------------------ | ------------------------------------------ |
 | Shallow merge (flat keys) | `\|\|` or `jsonb_merge()`      | Both fast; C ext ~11x faster than PL/pgSQL |
-| Deep recursive merge      | `jsonb_merge()`                | **7–25x faster** than PL/pgSQL             |
+| Deep recursive merge      | `jsonb_merge()`                | **7-25x faster** than PL/pgSQL             |
 | Array concatenation       | `jsonb_merge(..., true)`       | Only method that concatenates arrays       |
 | Key-based array merge     | `jsonb_merge(..., true, 'id')` | Unique to this extension                   |
 
@@ -57,7 +57,7 @@ WITH all_keys AS (
 SELECT id, json_object_agg(key, value) FROM all_keys GROUP BY id;
 ```
 
-**Why it's slow**: Decomposes every row into key-value rows (`jsonb_each`), sorts/deduplicates (`UNION`), then reaggregates (`json_object_agg`). For 1M rows × 3 keys = 6M intermediate rows. **Does not recurse** — nested objects are overwritten.
+**Why it's slow**: Decomposes every row into key-value rows (`jsonb_each`), sorts/deduplicates (`UNION`), then reaggregates (`json_object_agg`). For 1M rows × 3 keys = 6M intermediate rows. **Does not recurse** - nested objects are overwritten.
 
 ### `jsonb_merge()` (This Extension)
 
@@ -85,7 +85,7 @@ Each benchmark runs `SELECT sum(pg_column_size(merged)) FROM (SELECT jsonb_merge
 | 100K |   546 ms |   389 ms |     **35.4 ms** | 44.2 ms |
 |   1M | 5,139 ms | 3,940 ms |      **358 ms** |  153 ms |
 
-`jsonb_merge()` is **11x faster** than PL/pgSQL at 1M rows — even for flat objects where the PL/pgSQL function only loops 3 keys.
+`jsonb_merge()` is **11x faster** than PL/pgSQL at 1M rows - even for flat objects where the PL/pgSQL function only loops 3 keys.
 
 ### 3-Level Nested Objects
 
@@ -111,9 +111,9 @@ Each benchmark runs `SELECT sum(pg_column_size(merged)) FROM (SELECT jsonb_merge
 | 100K |  7,580 ms |      **291 ms** |     26x |
 |   1M | 63,619 ms |    **2,542 ms** | **25x** |
 
-### Heavy Objects — Fully Randomized
+### Heavy Objects - Fully Randomized
 
-**Data**: User profiles with `user.preferences.notifications`, `metrics.sessions`, `permissions.scopes`, `metadata.extra`. 20+ keys, 3 nesting levels. Every field uses `md5(random()::text)` — no two rows share any value. ~1,800 + ~1,440 bytes per document pair.
+**Data**: User profiles with `user.preferences.notifications`, `metrics.sessions`, `permissions.scopes`, `metadata.extra`. 20+ keys, 3 nesting levels. Every field uses `md5(random()::text)` - no two rows share any value. ~1,800 + ~1,440 bytes per document pair.
 
 | Rows |   PL/pgSQL | `jsonb_merge()` |  Speedup |
 | ---: | ---------: | --------------: | -------: |
