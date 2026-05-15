@@ -210,11 +210,59 @@ run_all_benchmarks() {
         END \$\$;
     " 500000
     
+    # Benchmark 7: Comparison with recursive SQL merge (CTE + jsonb_each + json_object_agg)
+    echo -e "${CYAN}📈 Performance Comparison: jsonb_merge vs Recursive SQL Merge (table-based)${NC}"
+    
+    # Setup: create a test table with rows to merge
+    docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
+        DROP TABLE IF EXISTS bench_merge_test;
+        CREATE TABLE bench_merge_test (id serial PRIMARY KEY, json1 jsonb, json2 jsonb);
+        INSERT INTO bench_merge_test (json1, json2)
+        SELECT
+            jsonb_build_object('a', i, 'b', i * 2, 'shared', 'from_json1'),
+            jsonb_build_object('c', i * 3, 'd', i * 4, 'shared', 'from_json2')
+        FROM generate_series(1, 100000) AS i;
+        ANALYZE bench_merge_test;
+    " >/dev/null 2>&1
+    
+    print_result "Created bench_merge_test table with 100,000 rows"
+    
+    run_benchmark "Recursive SQL merge (CTE + jsonb_each + json_object_agg) - 100k rows" "
+        SELECT count(*) FROM (
+            WITH all_json_key_value AS (
+                SELECT id, t1.key, t1.value FROM bench_merge_test, jsonb_each(json1) AS t1
+                UNION
+                SELECT id, t1.key, t1.value FROM bench_merge_test, jsonb_each(json2) AS t1
+            )
+            SELECT id, json_object_agg(key, value) AS merged
+            FROM all_json_key_value
+            GROUP BY id
+        ) sub;
+    " 100000
+    
+    run_benchmark "jsonb_merge function - 100k rows" "
+        SELECT count(*) FROM (
+            SELECT id, jsonb_merge(json1, json2) AS merged
+            FROM bench_merge_test
+        ) sub;
+    " 100000
+    
+    run_benchmark "Built-in || operator - 100k rows" "
+        SELECT count(*) FROM (
+            SELECT id, json1 || json2 AS merged
+            FROM bench_merge_test
+        ) sub;
+    " 100000
+    
+    # Cleanup
+    docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "DROP TABLE IF EXISTS bench_merge_test;" >/dev/null 2>&1
+    
     echo -e "${GREEN}🎯 Benchmark suite completed!${NC}"
     echo -e "${YELLOW}💡 Tips:${NC}"
     echo -e "   • Run this regularly to catch performance regressions"
     echo -e "   • Compare results before/after code changes"  
     echo -e "   • Built-in || operator only does shallow merge (no recursion)"
+    echo -e "   • Recursive SQL merge uses CTE + jsonb_each + UNION + json_object_agg"
     echo -e "   • Our extension provides deep recursive merging"
     echo -e "   • Use './test/docker-test.sh' for correctness tests"
 }

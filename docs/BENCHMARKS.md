@@ -2,23 +2,68 @@
 
 ## Benchmark Results
 
-Here are typical performance numbers from our test environment (Docker container with PostgreSQL 17):
+Here are performance numbers from our test environment (Docker container with PostgreSQL 17):
 
-### Simple Object Merge
+### Simple Object Merge (1,000,000 iterations)
 - **Operation**: `jsonb_merge('{"a": 1, "b": 2}', '{"c": 3, "d": 4}')`
-- **Performance**: ~0.0002 ms per operation (1000 iterations: 0.200 ms)
-- **Comparison**: Built-in `||` operator: ~0.0003 ms per operation
-- **Note**: Our extension is competitive with built-in operator for simple merges
+- **Total**: 26.252 ms — **~0.000026 ms per operation**
+- **Note**: On par with the built-in `||` operator for simple merges
 
-### Deep Recursive Merge
-- **Operation**: `jsonb_merge('{"a": {"b": {"c": {"d": 1}}}}', '{"a": {"b": {"c": {"e": 2}}}}')`
-- **Performance**: ~0.0016 ms per operation (100 iterations: 0.159 ms)
+### Deep Recursive Merge (100,000 iterations)
+- **Operation**: `jsonb_merge('{"a": {"b": {"c": {"d": {"e": 1}}}}}', '{"a": {"b": {"c": {"d": {"f": 2}}}}}')`
+- **Total**: 4.006 ms — **~0.000040 ms per operation**
 - **Note**: Built-in `||` operator cannot perform deep recursive merging
 
-### Array Merge
+### Large Object Merge (50,000 iterations)
+- **Operation**: Merge two objects with 20 keys each (40 keys total)
+- **Total**: 2.480 ms — **~0.000049 ms per operation**
+
+### Array Merge (100,000 iterations)
 - **Operation**: `jsonb_merge('{"data": [1,2,3,4,5]}', '{"data": [6,7,8,9,10]}', true)`
-- **Performance**: ~0.0016 ms per operation (100 iterations: 0.157 ms)
+- **Total**: 3.378 ms — **~0.000033 ms per operation**
 - **Note**: Built-in `||` operator replaces arrays, doesn't merge them
+
+### Complex Mixed Structures (10,000 iterations)
+- **Operation**: Merge objects with nested objects, arrays, and mixed types
+- **Total**: 0.971 ms — **~0.000097 ms per operation**
+
+## Performance Comparison: Scalar (500,000 iterations)
+
+| Method | Total | Avg per operation |
+|--------|------:|------------------:|
+| `jsonb_merge()` extension | 13.634 ms | 0.000027 ms |
+| Built-in `\|\|` operator | 13.216 ms | 0.000026 ms |
+
+`jsonb_merge()` is essentially on par with the built-in `||` operator for simple shallow merges, while providing deep recursive merge capabilities that `||` cannot do.
+
+## Performance Comparison: Table-based (100,000 rows)
+
+### Recursive SQL merge approach
+
+https://stackoverflow.com/questions/30101603/merging-concatenating-jsonb-columns-in-query
+
+```sql
+WITH all_json_key_value AS (
+  SELECT id, t1.key, t1.value FROM test, jsonb_each(json1) AS t1
+  UNION
+  SELECT id, t1.key, t1.value FROM test, jsonb_each(json2) AS t1
+)
+SELECT id, json_object_agg(key, value)
+FROM all_json_key_value
+GROUP BY id
+```
+
+### Results
+
+| Method | 100k rows | Avg per row |
+|--------|----------:|------------:|
+| Recursive SQL merge (CTE) | 559.886 ms | 0.005598 ms |
+| `jsonb_merge()` extension | 5.530 ms | 0.000055 ms |
+| Built-in `\|\|` operator | 5.470 ms | 0.000054 ms |
+
+**`jsonb_merge()` is ~100x faster than the recursive SQL approach.**
+
+The recursive SQL approach decomposes every row into individual key-value pairs via `jsonb_each`, unions them, and reaggregates with `json_object_agg` — resulting in massive overhead. `jsonb_merge()` operates directly on the binary JSONB representation, avoiding this cost entirely.
 
 ## Running Benchmarks
 
