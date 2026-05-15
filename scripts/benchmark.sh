@@ -186,9 +186,8 @@ run_all_benchmarks() {
     " 10000
     
     # Benchmark 6: Comparison with built-in operator
-    echo -e "${CYAN}📈 Performance Comparison${NC}"
+    echo -e "${CYAN}📈 Performance Comparison (scalar, 500k iterations)${NC}"
     
-    # Our extension
     run_benchmark "jsonb_merge function" "
         DO \$\$
         DECLARE i integer; result jsonb;
@@ -199,7 +198,6 @@ run_all_benchmarks() {
         END \$\$;
     " 500000
     
-    # Built-in || operator (for comparison)
     run_benchmark "Built-in || operator" "
         DO \$\$
         DECLARE i integer; result jsonb;
@@ -210,52 +208,211 @@ run_all_benchmarks() {
         END \$\$;
     " 500000
     
-    # Benchmark 7: Comparison with recursive SQL merge (CTE + jsonb_each + json_object_agg)
-    echo -e "${CYAN}📈 Performance Comparison: jsonb_merge vs Recursive SQL Merge (table-based)${NC}"
+    # =========================================================================
+    # Scaling benchmarks across row counts
+    # =========================================================================
     
-    # Setup: create a test table with rows to merge
+    # Create PL/pgSQL deep merge function for comparison
     docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
-        DROP TABLE IF EXISTS bench_merge_test;
-        CREATE TABLE bench_merge_test (id serial PRIMARY KEY, json1 jsonb, json2 jsonb);
-        INSERT INTO bench_merge_test (json1, json2)
-        SELECT
-            jsonb_build_object('a', i, 'b', i * 2, 'shared', 'from_json1'),
-            jsonb_build_object('c', i * 3, 'd', i * 4, 'shared', 'from_json2')
-        FROM generate_series(1, 100000) AS i;
-        ANALYZE bench_merge_test;
+        CREATE OR REPLACE FUNCTION jsonb_deep_merge_sql(a jsonb, b jsonb) RETURNS jsonb AS \$\$
+        DECLARE
+            result jsonb := a;
+            key text;
+            val jsonb;
+        BEGIN
+            FOR key, val IN SELECT * FROM jsonb_each(b) LOOP
+                IF result ? key AND jsonb_typeof(result->key) = 'object' AND jsonb_typeof(val) = 'object' THEN
+                    result := jsonb_set(result, ARRAY[key], jsonb_deep_merge_sql(result->key, val));
+                ELSE
+                    result := jsonb_set(result, ARRAY[key], val);
+                END IF;
+            END LOOP;
+            RETURN result;
+        END;
+        \$\$ LANGUAGE plpgsql IMMUTABLE;
     " >/dev/null 2>&1
     
-    print_result "Created bench_merge_test table with 100,000 rows"
+    ROW_COUNTS="100 1000 10000 100000 1000000"
     
-    run_benchmark "Recursive SQL merge (CTE + jsonb_each + json_object_agg) - 100k rows" "
-        SELECT count(*) FROM (
-            WITH all_json_key_value AS (
-                SELECT id, t1.key, t1.value FROM bench_merge_test, jsonb_each(json1) AS t1
-                UNION
-                SELECT id, t1.key, t1.value FROM bench_merge_test, jsonb_each(json2) AS t1
-            )
-            SELECT id, json_object_agg(key, value) AS merged
-            FROM all_json_key_value
-            GROUP BY id
-        ) sub;
-    " 100000
+    # ---- Scenario A: Flat object merge (shallow) ----
+    echo -e "${CYAN}📈 Scaling: Flat Object Merge (shallow)${NC}"
     
-    run_benchmark "jsonb_merge function - 100k rows" "
-        SELECT count(*) FROM (
-            SELECT id, jsonb_merge(json1, json2) AS merged
-            FROM bench_merge_test
-        ) sub;
-    " 100000
+    for N in $ROW_COUNTS; do
+        docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
+            DROP TABLE IF EXISTS bench_scale;
+            CREATE TABLE bench_scale (id serial PRIMARY KEY, json1 jsonb, json2 jsonb);
+            INSERT INTO bench_scale (json1, json2)
+            SELECT
+                jsonb_build_object('a', i, 'b', i*2, 'shared', 'from_json1'),
+                jsonb_build_object('c', i*3, 'd', i*4, 'shared', 'from_json2')
+            FROM generate_series(1, $N) AS i;
+            ANALYZE bench_scale;
+        " >/dev/null 2>&1
+        
+        run_benchmark "CTE SQL merge - flat ${N} rows" "
+            SELECT count(*) FROM (
+                WITH all_json_key_value AS (
+                    SELECT id, t1.key, t1.value FROM bench_scale, jsonb_each(json1) AS t1
+                    UNION
+                    SELECT id, t1.key, t1.value FROM bench_scale, jsonb_each(json2) AS t1
+                )
+                SELECT id, json_object_agg(key, value) AS merged
+                FROM all_json_key_value GROUP BY id
+            ) sub;
+        " $N
+        
+        run_benchmark "jsonb_merge() - flat ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_merge(json1, json2) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "|| operator - flat ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, json1 || json2 AS merged FROM bench_scale
+            ) sub;
+        " $N
+    done
     
-    run_benchmark "Built-in || operator - 100k rows" "
-        SELECT count(*) FROM (
-            SELECT id, json1 || json2 AS merged
-            FROM bench_merge_test
-        ) sub;
-    " 100000
+    # ---- Scenario B: 3-level nested object merge ----
+    echo -e "${CYAN}📈 Scaling: 3-Level Nested Object Merge${NC}"
+    
+    for N in $ROW_COUNTS; do
+        docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
+            DROP TABLE IF EXISTS bench_scale;
+            CREATE TABLE bench_scale (id serial PRIMARY KEY, json1 jsonb, json2 jsonb);
+            INSERT INTO bench_scale (json1, json2)
+            SELECT
+                jsonb_build_object(
+                    'config', jsonb_build_object(
+                        'database', jsonb_build_object('host', 'localhost', 'port', 5432, 'pool', jsonb_build_object('min', 2, 'max', 10)),
+                        'cache', jsonb_build_object('ttl', 3600, 'backend', 'redis'),
+                        'logging', jsonb_build_object('level', 'info', 'format', 'json')
+                    ),
+                    'users', jsonb_build_object('count', i, 'active', true),
+                    'version', '1.0'
+                ),
+                jsonb_build_object(
+                    'config', jsonb_build_object(
+                        'database', jsonb_build_object('port', 5433, 'ssl', true, 'pool', jsonb_build_object('max', 20, 'idle_timeout', 30)),
+                        'cache', jsonb_build_object('ttl', 7200, 'compression', true),
+                        'monitoring', jsonb_build_object('enabled', true, 'interval', 60)
+                    ),
+                    'users', jsonb_build_object('count', i*2, 'roles', '[\"admin\",\"user\"]'::jsonb),
+                    'deployed', true
+                )
+            FROM generate_series(1, $N) AS i;
+            ANALYZE bench_scale;
+        " >/dev/null 2>&1
+        
+        run_benchmark "PL/pgSQL deep merge - 3-level ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_deep_merge_sql(json1, json2) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "jsonb_merge() - 3-level ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_merge(json1, json2) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "|| operator (shallow) - 3-level ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, json1 || json2 AS merged FROM bench_scale
+            ) sub;
+        " $N
+    done
+    
+    # ---- Scenario C: 4+ level real-world config merge ----
+    echo -e "${CYAN}📈 Scaling: 4+ Level Real-World Config Merge${NC}"
+    
+    for N in $ROW_COUNTS; do
+        docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
+            DROP TABLE IF EXISTS bench_scale;
+            CREATE TABLE bench_scale (id serial PRIMARY KEY, json1 jsonb, json2 jsonb);
+            INSERT INTO bench_scale (json1, json2)
+            SELECT
+                '{
+                    \"app\": {\"name\": \"myapp\", \"env\": \"production\", \"features\": {\"auth\": true, \"cache\": true, \"notifications\": {\"email\": true, \"sms\": false, \"push\": {\"enabled\": true, \"provider\": \"firebase\"}}}},
+                    \"db\": {\"primary\": {\"host\": \"db1.example.com\", \"port\": 5432, \"credentials\": {\"user\": \"app\", \"pool_size\": 10}}, \"replica\": {\"host\": \"db2.example.com\", \"port\": 5432}},
+                    \"api\": {\"rate_limit\": {\"window\": 60, \"max_requests\": 1000}, \"cors\": {\"origins\": [\"https://example.com\"], \"methods\": [\"GET\", \"POST\"]}}
+                }'::jsonb,
+                jsonb_build_object(
+                    'app', jsonb_build_object('env', 'staging', 'debug', true, 'features', jsonb_build_object('cache', false, 'notifications', jsonb_build_object('sms', true, 'push', jsonb_build_object('provider', 'apns')))),
+                    'db', jsonb_build_object('primary', jsonb_build_object('host', 'staging-db.example.com', 'credentials', jsonb_build_object('pool_size', 5))),
+                    'api', jsonb_build_object('rate_limit', jsonb_build_object('max_requests', 100), 'version', 'v2')
+                )
+            FROM generate_series(1, $N) AS i;
+            ANALYZE bench_scale;
+        " >/dev/null 2>&1
+        
+        run_benchmark "PL/pgSQL deep merge - config ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_deep_merge_sql(json1, json2) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "jsonb_merge() - config ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_merge(json1, json2) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "|| operator (shallow) - config ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, json1 || json2 AS merged FROM bench_scale
+            ) sub;
+        " $N
+    done
+    
+    # ---- Scenario D: Array merge ----
+    echo -e "${CYAN}📈 Scaling: Array Merge${NC}"
+    
+    for N in $ROW_COUNTS; do
+        docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
+            DROP TABLE IF EXISTS bench_scale;
+            CREATE TABLE bench_scale (id serial PRIMARY KEY, json1 jsonb, json2 jsonb);
+            INSERT INTO bench_scale (json1, json2)
+            SELECT
+                jsonb_build_object(
+                    'tags', jsonb_build_array('alpha', 'beta', 'gamma'),
+                    'scores', jsonb_build_array(i, i*2, i*3),
+                    'meta', jsonb_build_object('items', jsonb_build_array(1, 2, 3))
+                ),
+                jsonb_build_object(
+                    'tags', jsonb_build_array('delta', 'epsilon'),
+                    'scores', jsonb_build_array(i*4, i*5),
+                    'meta', jsonb_build_object('items', jsonb_build_array(4, 5, 6))
+                )
+            FROM generate_series(1, $N) AS i;
+            ANALYZE bench_scale;
+        " >/dev/null 2>&1
+        
+        run_benchmark "jsonb_merge(merge_arrays=true) - arrays ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_merge(json1, json2, true) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "jsonb_merge(merge_arrays=false) - arrays ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, jsonb_merge(json1, json2) AS merged FROM bench_scale
+            ) sub;
+        " $N
+        
+        run_benchmark "|| operator - arrays ${N} rows" "
+            SELECT count(*) FROM (
+                SELECT id, json1 || json2 AS merged FROM bench_scale
+            ) sub;
+        " $N
+    done
     
     # Cleanup
-    docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "DROP TABLE IF EXISTS bench_merge_test;" >/dev/null 2>&1
+    docker exec $CONTAINER_NAME psql -U postgres -d postgres -c "
+        DROP TABLE IF EXISTS bench_scale;
+        DROP FUNCTION IF EXISTS jsonb_deep_merge_sql(jsonb, jsonb);
+    " >/dev/null 2>&1
     
     echo -e "${GREEN}🎯 Benchmark suite completed!${NC}"
     echo -e "${YELLOW}💡 Tips:${NC}"
