@@ -18,3 +18,10 @@ AS 'MODULE_PATHNAME', 'jsonb_merge_with_option'
 LANGUAGE C IMMUTABLE;
 
 COMMENT ON FUNCTION jsonb_merge(jsonb, jsonb, boolean) IS 'Merges two JSONB values, with the second one taking precedence on conflicts, and with optional array merging';
+
+CREATE OR REPLACE FUNCTION jsonb_merge(jsonb, jsonb, boolean, text)
+RETURNS jsonb
+AS 'MODULE_PATHNAME', 'jsonb_merge_with_key'
+LANGUAGE C IMMUTABLE;
+
+COMMENT ON FUNCTION jsonb_merge(jsonb, jsonb, boolean, text) IS 'Merges two JSONB values with optional array merging. When a key is provided, arrays of objects are merged by matching on that key.';
