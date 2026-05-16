@@ -21,6 +21,8 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Run quick test with latest PostgreSQL
+      env:
+        POSTGRES_IMAGE: postgres:18-alpine3.23
       run: |
         # Use the existing docker-test.sh script
         chmod +x test/docker-test.sh
@@ -30,6 +32,8 @@ jobs:
     name: Compatibility Test PG${{ matrix.pg_version }}
     runs-on: ubuntu-latest
     if: contains(github.event.pull_request.labels.*.name, 'test-all-versions')
+    env:
+      POSTGRES_IMAGE: ${{ matrix.image }}
     
     strategy:
       matrix:
@@ -51,11 +55,6 @@ jobs:
 
     - name: Test PostgreSQL ${{ matrix.pg_version }}
       run: |
-        # Create custom docker-compose for this PG version
-        sed "s/postgres:.*-alpine/${{ matrix.image }}/" docker-compose.yml > docker-compose.test.yml
-        
-        # Run tests
-        export COMPOSE_FILE=docker-compose.test.yml
         chmod +x test/docker-test.sh
         echo "n" | ./test/docker-test.sh
 
