@@ -35,7 +35,7 @@ jobs:
           - pg_version: 17
             image: postgres:17-alpine3.21
           - pg_version: 18
-            image: postgres:18-alpine
+            image: postgres:18-alpine3.23
     
     steps:
     - name: Checkout code
@@ -73,9 +73,33 @@ jobs:
     - name: Start PostgreSQL ${{ matrix.pg_version }}
       run: |
         docker compose -f docker-compose.test.yml up -d
-        
-        # Wait for PostgreSQL to be ready
-        timeout 60 bash -c 'until docker exec jsonb_merge_test_db pg_isready -U postgres; do sleep 2; done'
+
+        ready=false
+        for attempt in $(seq 1 30); do
+          status=$(docker inspect -f '{{.State.Status}}' jsonb_merge_test_db 2>/dev/null || echo missing)
+
+          if [ "$status" != "running" ]; then
+            echo "PostgreSQL container stopped early (status: $status)"
+            docker ps -a --filter "name=^/jsonb_merge_test_db$"
+            docker logs jsonb_merge_test_db || true
+            exit 1
+          fi
+
+          if docker exec jsonb_merge_test_db pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+            echo "PostgreSQL is ready"
+            ready=true
+            break
+          fi
+
+          echo "Waiting for PostgreSQL ($attempt/30)..."
+          sleep 2
+        done
+
+        if [ "$ready" != "true" ]; then
+          echo "PostgreSQL did not become ready within 60 seconds"
+          docker logs jsonb_merge_test_db || true
+          exit 1
+        fi
 
     - name: Install build dependencies in container
       run: |
@@ -168,7 +192,7 @@ jobs:
           - pg_version: 17
             image: postgres:17-alpine3.21
           - pg_version: 18
-            image: postgres:18-alpine
+            image: postgres:18-alpine3.23
     
     steps:
     - name: Checkout code

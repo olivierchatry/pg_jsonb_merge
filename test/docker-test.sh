@@ -66,6 +66,16 @@ run_docker_compose() {
     fi
 }
 
+get_container_status() {
+    docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "missing"
+}
+
+print_container_diagnostics() {
+    print_error "💥 Container '$CONTAINER_NAME' is not running"
+    docker ps -a --filter "name=^/${CONTAINER_NAME}$" || true
+    docker logs "$CONTAINER_NAME" || true
+}
+
 # Function to wait for PostgreSQL to be ready
 wait_for_postgres() {
     print_status "⏳ Waiting for PostgreSQL to be ready..."
@@ -73,6 +83,15 @@ wait_for_postgres() {
     local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
+        local status
+        status=$(get_container_status)
+
+        if [ "$status" != "running" ]; then
+            print_error "💥 PostgreSQL container status is '$status'"
+            print_container_diagnostics
+            return 1
+        fi
+
         if docker exec $CONTAINER_NAME pg_isready -U postgres -d postgres >/dev/null 2>&1; then
             print_success "🐘 PostgreSQL is ready"
             return 0
@@ -90,6 +109,11 @@ wait_for_postgres() {
 # Function to build and copy extension to container
 install_extension() {
     print_status " Detecting PostgreSQL paths in container..."
+    local pg_major
+    local dev_package
+
+    pg_major=$(docker exec $CONTAINER_NAME sh -c "pg_config --version | awk '{print \\$2}' | cut -d. -f1")
+    dev_package="postgresql${pg_major}-dev"
     
     # Get PostgreSQL paths from inside the container
     CONTAINER_PKGLIBDIR=$(docker exec $CONTAINER_NAME pg_config --pkglibdir 2>/dev/null || echo "/usr/local/lib/postgresql")
@@ -99,6 +123,7 @@ install_extension() {
     print_status "📁 Container PostgreSQL paths:"
     print_status "  📚 Library dir: $CONTAINER_PKGLIBDIR"
     print_status "  📦 Extension dir: $CONTAINER_EXTENSIONDIR"
+    print_status "  🧰 Build package: $dev_package"
     
     print_status "📥 Installing build dependencies in container..."
     # Install only the essential packages needed for building PostgreSQL extensions
@@ -106,7 +131,7 @@ install_extension() {
         gcc \
         musl-dev \
         make \
-        postgresql17-dev >/dev/null 2>&1
+        "$dev_package" >/dev/null 2>&1
     
     print_status "🔧 Copying and building extension in container..."
     

@@ -15,6 +15,7 @@ on:
           - '15'
           - '16'
           - '17'
+          - '18'
       create_artifacts:
         description: 'Create build artifacts'
         type: boolean
@@ -42,7 +43,8 @@ jobs:
           15) echo "image=postgres:15-alpine3.19" >> $GITHUB_OUTPUT ;;
           16) echo "image=postgres:16-alpine3.20" >> $GITHUB_OUTPUT ;;
           17) echo "image=postgres:17-alpine3.21" >> $GITHUB_OUTPUT ;;
-          *) echo "image=postgres:17-alpine3.21" >> $GITHUB_OUTPUT ;;
+          18) echo "image=postgres:18-alpine3.23" >> $GITHUB_OUTPUT ;;
+          *) echo "image=postgres:18-alpine3.23" >> $GITHUB_OUTPUT ;;
         esac
 
     - name: Quick test PostgreSQL ${{ github.event.inputs.pg_version }}
@@ -51,9 +53,33 @@ jobs:
         docker run --name test_pg${{ github.event.inputs.pg_version }} -d \
           -e POSTGRES_PASSWORD=postgres \
           ${{ steps.set_image.outputs.image }}
-        
-        # Wait for PostgreSQL
-        sleep 10
+
+        ready=false
+        for attempt in $(seq 1 30); do
+          status=$(docker inspect -f '{{.State.Status}}' test_pg${{ github.event.inputs.pg_version }} 2>/dev/null || echo missing)
+
+          if [ "$status" != "running" ]; then
+            echo "PostgreSQL container stopped early (status: $status)"
+            docker ps -a --filter "name=^/test_pg${{ github.event.inputs.pg_version }}$"
+            docker logs test_pg${{ github.event.inputs.pg_version }} || true
+            exit 1
+          fi
+
+          if docker exec test_pg${{ github.event.inputs.pg_version }} pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+            echo "PostgreSQL is ready"
+            ready=true
+            break
+          fi
+
+          echo "Waiting for PostgreSQL ($attempt/30)..."
+          sleep 2
+        done
+
+        if [ "$ready" != "true" ]; then
+          echo "PostgreSQL did not become ready within 60 seconds"
+          docker logs test_pg${{ github.event.inputs.pg_version }} || true
+          exit 1
+        fi
         
         # Install dependencies and build
         docker exec test_pg${{ github.event.inputs.pg_version }} apk add --no-cache \

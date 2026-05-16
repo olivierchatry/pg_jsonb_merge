@@ -35,6 +35,16 @@ print_error() {
     echo -e "${RED}   ✗ $1${NC}"
 }
 
+get_container_status() {
+    docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "missing"
+}
+
+print_container_diagnostics() {
+    print_error "Container '$CONTAINER_NAME' is not running"
+    docker ps -a --filter "name=^/${CONTAINER_NAME}$" || true
+    docker logs "$CONTAINER_NAME" || true
+}
+
 # Function to setup the environment
 setup_environment() {
     print_benchmark "Setting up benchmark environment..."
@@ -64,6 +74,15 @@ setup_environment() {
         # Wait for PostgreSQL to be ready
         local attempts=0
         while [ $attempts -lt 30 ]; do
+            local status
+            status=$(get_container_status)
+
+            if [ "$status" != "running" ]; then
+                print_error "PostgreSQL container status is '$status'"
+                print_container_diagnostics
+                exit 1
+            fi
+
             if docker exec $CONTAINER_NAME pg_isready -U postgres -d postgres >/dev/null 2>&1; then
                 break
             fi
@@ -79,7 +98,13 @@ setup_environment() {
     
     # Install build dependencies and build extension
     print_benchmark "Installing and building extension..."
-    docker exec $CONTAINER_NAME apk add --no-cache gcc musl-dev make postgresql17-dev >/dev/null 2>&1
+    local pg_major
+    local dev_package
+
+    pg_major=$(docker exec $CONTAINER_NAME sh -c "pg_config --version | awk '{print \\$2}' | cut -d. -f1")
+    dev_package="postgresql${pg_major}-dev"
+
+    docker exec $CONTAINER_NAME apk add --no-cache gcc musl-dev make "$dev_package" >/dev/null 2>&1
     docker cp . $CONTAINER_NAME:/tmp/ >/dev/null 2>&1
     docker exec $CONTAINER_NAME sh -c "cd /tmp && make clean && make install with_llvm=no" >/dev/null 2>&1
     
